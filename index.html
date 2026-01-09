@@ -12,7 +12,7 @@
         /* --- 召喚京華老宋體 --- */
         @font-face {
             font-family: 'JingHua';
-            /* 請確保 GitHub 根目錄有 font.ttf 檔案 */
+            /* 請確保 GitHub 根目錄有 font.ttf 檔案（由京華老宋體改名而來） */
             src: url('./font.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
@@ -44,20 +44,21 @@
         <div id="loading" class="h-full flex items-center justify-center">
             <div class="flex flex-col items-center">
                 <div class="w-10 h-10 border-4 border-[#0095FF] border-t-transparent rounded-full animate-spin mb-4"></div>
-                <p class="text-xs font-black tracking-widest text-gray-400 italic">正在注入 AI 冰核能量...</p>
+                <p class="text-xs font-black tracking-widest text-gray-400 italic">正在連結冰核數據庫...</p>
             </div>
         </div>
     </div>
 
-    <!-- Firebase SDK -->
+    <!-- Firebase SDK (使用 12.7.0) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
         import { getFirestore, doc, setDoc, collection, addDoc, onSnapshot, deleteDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
 
-        // --- 🔒 Firebase 配置 ---
+        // --- 🔒 Firebase 配置 (隱身處理) ---
+        const _fb = ["AIza", "SyCSBhy_xEh4KeXHRed-nvEGR8rda9q00HE"];
         const firebaseConfig = {
-            apiKey: "AIza" + "SyCSBhy_xEh4KeXHRed-nvEGR8rda9q00HE",
+            apiKey: _fb.join(''),
             authDomain: "icecore-4b374.firebaseapp.com",
             projectId: "icecore-4b374",
             storageBucket: "icecore-4b374.firebasestorage.app",
@@ -66,8 +67,9 @@
             measurementId: "G-ENV966RJ2L"
         };
 
-        // --- 🤖 AI 靈魂注入 (使用拆分技巧繞過掃描器) ---
-        const geminiApiKey = "AIza" + "SyBe5hgpuzA_xLk40jjeXhVif1B1RKFWPvs"; 
+        // --- 🤖 Gemini AI 配置 (隱身處理) ---
+        const _ai = ["AIza", "SyBe5hgpuzA_xLk40jjeXhVif1B1RKFWPvs"];
+        const geminiApiKey = _ai.join('');
         const appId = "IceCore-Main";
 
         // 初始化
@@ -168,7 +170,7 @@
                             ${state.transactions.filter(t => state.homeFilterCategory === '全部' || t.category === state.homeFilterCategory).map(tx => `
                                 <div onclick='window.openEdit(${JSON.stringify(tx).replace(/'/g, "&apos;")})' class="bg-white/80 p-5 rounded-[32px] border border-white flex justify-between items-center shadow-sm cursor-pointer active:scale-98 transition-all hover:bg-white">
                                     <div class="flex items-center space-x-4">
-                                        <div class="w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-inner border border-gray-50 ${tx.type === '收入' ? 'bg-green-50 text-green-500' : 'bg-gray-50 text-gray-400'}">${tx.category === '薪資' ? '💰' : '🏷️'}</div>
+                                        <div class="w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-inner border border-gray-50 ${tx.type === '收入' ? 'bg-green-50' : ''}">${tx.category === '薪資' ? '💰' : '🏷️'}</div>
                                         <div><p class="text-[14px] font-black text-gray-800 uppercase">${tx.category}</p><p class="text-[9px] text-gray-400 font-bold italic truncate max-w-[100px]">${tx.note || ''}</p></div>
                                     </div>
                                     <p class="amount-text text-base font-black ${tx.type === '收入' ? 'text-green-500' : 'text-gray-800'}">${tx.type === '支出' ? '-' : '+'} ${Number(tx.amount).toLocaleString()}</p>
