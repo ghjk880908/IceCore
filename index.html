@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GlacierVault | 冰感財務終端</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #F0F4F8; color: #2D3436; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .glass { background: rgba(255, 255, 255, 0.4); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.6); }
+        @keyframes slideUp { from { transform: translateY(100px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .animate-slide-up { animation: slideUp 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+    </style>
+</head>
+<body class="h-screen flex justify-center overflow-hidden select-none">
+
+    <!-- 主容器 -->
+    <div id="app" class="w-full max-w-md h-full flex flex-col relative glass border-x shadow-2xl overflow-hidden z-10">
+        <div id="loading" class="h-full flex items-center justify-center">
+            <div class="flex flex-col items-center">
+                <div class="w-8 h-8 border-4 border-[#0095FF] border-t-transparent rounded-full animate-spin mb-4"></div>
+                <p class="text-xs font-black tracking-widest text-gray-400 italic">正在凝聚冰封數據...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK (v11.6.1) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, doc, setDoc, collection, addDoc, onSnapshot, deleteDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // --- 你的個人 Firebase 配置 (已灌入) ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyDN-EBTCqomuTAir3dfYl8Wv5t6-QN8rz8",
+            authDomain: "icecore-4b374.firebaseapp.com",
+            projectId: "icecore-4b374",
+            storageBucket: "icecore-4b374.firebasestorage.app",
+            messagingSenderId: "565823573872",
+            appId: "1:565823573872:web:14037e0b072348f43689b5",
+            measurementId: "G-ENV966RJ2L"
+        };
+
+        const appId = "glacier-vault-prod";
+        // 💡 提示：Gemini API Key 若要部屬在 GitHub，建議也填入此處
+        const apiKey = ""; 
+
+        // 初始化
+        const firebaseApp = initializeApp(firebaseConfig);
+        const auth = getAuth(firebaseApp);
+        const db = getFirestore(firebaseApp);
+
+        // --- 全域狀態 ---
+        let state = {
+            user: null,
+            transactions: [],
+            categories: ['食品', '交通', '購物', '薪資', '房貸', '休閒', '訂閱', '學習'],
+            activeView: 'home', 
+            isAdding: false,
+            isSettingBalance: false,
+            isManagingCategories: false,
+            editingTx: null,
+            inputNote: '',
+            selectedCategory: 'AI 萊歐斯',
+            homeFilterCategory: '全部',
+            initialBalance: 0,
+            isGeminiLoading: false,
+            currentMonth: new Date(),
+            selectedDay: new Date()
+        };
+
+        // --- 核心邏輯 ---
+        const parseAmount = (val) => {
+            if (!val) return 0;
+            const str = String(val).toLowerCase().replace(/,/g, '').trim();
+            if (str.endsWith('w')) return (parseFloat(str) || 0) * 10000;
+            if (str.endsWith('k')) return (parseFloat(str) || 0) * 1000;
+            return parseFloat(str) || 0;
+        };
+
+        const fetchGemini = async (prompt, retry = 0) => {
+            if (!apiKey) {
+                console.warn("Gemini API Key is missing");
+                return "[]";
+            }
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                const data = await response.json();
+                return data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+            } catch (e) {
+                if (retry < 3) return fetchGemini(prompt, retry + 1);
+                throw e;
+            }
+        };
+
+        // --- Firebase 監聽 (Rule 3: 確保登入後才讀取) ---
+        function setupListeners() {
+            if (!state.user) return;
+
+            // 監聽初始配置
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), (snap) => {
+                if (snap.exists()) state.initialBalance = snap.data().initialBalance || 0;
+                render();
+            }, (err) => console.error("Config access denied", err));
+
+            // 監聽標籤
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'user_cats'), (snap) => {
+                if (snap.exists() && snap.data().list) state.categories = snap.data().list;
+                render();
+            }, (err) => console.error("Cats access denied", err));
+
+            // 監聽交易
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), (snap) => {
+                const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                state.transactions = data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+                render();
+            }, (err) => console.error("Tx access denied", err));
+        }
+
+        // --- 介面渲染 ---
+        function render() {
+            const root = document.getElementById('app');
+            if (!state.user) return;
+
+            const incomeTotal = state.transactions.filter(t => t.type === '收入').reduce((acc, cur) => acc + (Number(cur.amount) || 0), 0);
+            const expenseTotal = state.transactions.filter(t => t.type === '支出').reduce((acc, cur) => acc + (Number(cur.amount) || 0), 0);
+            const currentBalance = state.initialBalance + incomeTotal - expenseTotal;
+            const filteredExpense = state.homeFilterCategory === '全部' 
+                ? expenseTotal 
+                : state.transactions.filter(t => t.type === '支出' && t.category === state.homeFilterCategory).reduce((acc, cur) => acc + (Number(cur.amount) || 0), 0);
+
+            const year = state.currentMonth.getFullYear();
+            const month = state.currentMonth.getMonth();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const firstDay = new Date(year, month, 1).getDay();
+            const calendarDays = [];
+            for (let i = 0; i < firstDay; i++) calendarDays.push(null);
+            for (let i = 1; i <= daysInMonth; i++) calendarDays.push(new Date(year, month, i));
+
+            let content = `
+                <header class="pt-16 px-8 pb-4 flex-shrink-0 flex justify-between items-end z-10 animate-fade-in">
+                    <div>
+                        <p class="text-[10px] font-black text-[#0095FF] tracking-[0.3em] mb-1 uppercase italic">GLACIER_VAULT</p>
+                        <h1 class="text-3xl font-light tracking-tighter italic text-gray-800 uppercase">
+                            ${state.activeView === 'home' ? '資產概覽' : state.activeView === 'calendar' ? '冒險曆像' : '財務分析'}
+                        </h1>
+                    </div>
+                    <div class="flex space-x-2">
+                        <button onclick="window.toggleManagingCategories(true)" class="text-[9px] font-bold text-gray-400 bg-white/80 px-3 py-1.5 rounded-full border border-white active:scale-95 transition-all">標籤</button>
+                        <button onclick="window.toggleSettingBalance(true)" class="text-[9px] font-bold text-gray-400 bg-white/80 px-3 py-1.5 rounded-full border border-white active:scale-95 transition-all">資產</button>
+                    </div>
+                </header>
+                <main class="flex-1 overflow-y-auto no-scrollbar px-6 pb-40 z-10">
+            `;
+
+            if (state.activeView === 'home') {
+                content += `
+                    <div class="space-y-6 animate-fade-in">
+                        <div onclick="window.toggleSettingBalance(true)" class="bg-white/80 rounded-[45px] p-10 shadow-sm border border-white relative overflow-hidden cursor-pointer active:scale-95 transition-all group">
+                            <p class="text-[11px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-2 text-center">總資產核心</p>
+                            <h2 class="text-5xl font-black text-[#0095FF] tracking-tighter text-center">
+                                <span class="text-2xl mr-1 font-medium opacity-20 italic">NT$</span>${currentBalance.toLocaleString()}
+                            </h2>
+                            <div class="mt-10 grid grid-cols-2 gap-4 border-t border-gray-100 pt-8">
+                                <div class="bg-[#0095FF]/5 p-4 rounded-[24px] border border-white text-center"><p class="text-[9px] text-gray-400 font-black mb-1 uppercase">累計捕獲</p><p class="text-lg font-bold text-green-500">+${incomeTotal.toLocaleString()}</p></div>
+                                <div class="bg-[#0095FF]/5 p-4 rounded-[24px] border border-white text-center ${state.homeFilterCategory !== '全部' ? 'ring-2 ring-[#0095FF]' : ''}"><p class="text-[9px] text-gray-400 font-black mb-1 uppercase">${state.homeFilterCategory === '全部' ? '本月消耗' : state.homeFilterCategory}</p><p class="text-lg font-bold text-gray-700">-${filteredExpense.toLocaleString()}</p></div>
+                            </div>
+                        </div>
+                        <div class="relative overflow-x-auto no-scrollbar flex space-x-3 pb-2 px-1">
+                            ${['全部', ...state.categories].map(cat => `<button onclick="window.setHomeFilter('${cat}')" class="px-5 py-2 rounded-full text-[11px] font-black whitespace-nowrap border transition-all ${state.homeFilterCategory === cat ? 'bg-[#0095FF] text-white border-[#0095FF] shadow-lg' : 'bg-white/60 text-gray-400 border-transparent hover:bg-white'}">${cat}</button>`).join('')}
+                        </div>
+                        <div class="space-y-4">
+                            <h3 class="text-[10px] font-black tracking-[0.3em] text-gray-300 uppercase italic px-2">最近交易日誌</h3>
+                            ${state.transactions.filter(t => state.homeFilterCategory === '全部' || t.category === state.homeFilterCategory).map(tx => `
+                                <div onclick='window.openEdit(${JSON.stringify(tx).replace(/'/g, "&apos;")})' class="bg-white/80 p-5 rounded-[32px] border border-white flex justify-between items-center shadow-sm cursor-pointer active:scale-98 transition-all">
+                                    <div class="flex items-center space-x-4">
+                                        <div class="w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-inner border border-gray-50 ${tx.type === '收入' ? 'bg-green-50 text-green-500' : 'bg-gray-50 text-gray-400'}">${tx.category === '薪資' ? '💰' : tx.category === '房貸' ? '🏰' : '📝'}</div>
+                                        <div><p class="text-[14px] font-black text-gray-800 uppercase">${tx.category}</p><p class="text-[9px] text-gray-400 font-bold italic truncate max-w-[100px]">${tx.note || ''}</p></div>
+                                    </div>
+                                    <div class="text-right"><p class="text-base font-black tracking-tighter ${tx.type === '收入' ? 'text-green-500' : 'text-gray-800'}">${tx.type === '支出' ? '-' : '+'} ${Number(tx.amount).toLocaleString()}</p></div>
+                                </div>
+                            `).join('') || '<p class="text-center py-10 text-gray-300 text-xs italic">無數據 🧊</p>'}
+                        </div>
+                    </div>
+                `;
+            } else if (state.activeView === 'calendar') {
+                content += `
+                    <div class="space-y-8 animate-fade-in">
+                        <div class="bg-white/80 rounded-[40px] p-6 border border-white shadow-lg">
+                            <div class="flex justify-between items-center mb-6 px-2">
+                                <button onclick="window.changeMonth(-1)" class="p-2 bg-gray-50 rounded-full text-gray-400 active:scale-90 transition-all">❮</button>
+                                <h3 class="text-lg font-black text-gray-800 italic">${year}年 ${month + 1}月</h3>
+                                <button onclick="window.changeMonth(1)" class="p-2 bg-gray-50 rounded-full text-gray-400 active:scale-90 transition-all">❯</button>
+                            </div>
+                            <div class="grid grid-cols-7 gap-1 text-center mb-2">${['日', '一', '二', '三', '四', '五', '六'].map(d => `<span class="text-[10px] font-black text-gray-300 uppercase">${d}</span>`).join('')}</div>
+                            <div class="grid grid-cols-7 gap-1">
+                                ${calendarDays.map((date, i) => {
+                                    const total = date ? state.transactions.filter(t => t.type === '支出' && t.createdAt?.seconds && new Date(t.createdAt.seconds * 1000).toDateString() === date.toDateString()).reduce((acc, cur) => acc + (Number(cur.amount) || 0), 0) : 0;
+                                    const isSelected = date && date.toDateString() === state.selectedDay.toDateString();
+                                    return `
+                                        <div onclick="${date ? `window.selectDay('${date.toISOString()}')` : ''}" class="aspect-square rounded-xl flex flex-col items-center justify-center relative cursor-pointer transition-all ${!date ? 'opacity-0' : isSelected ? 'bg-[#0095FF] text-white shadow-lg' : 'bg-gray-50/50 hover:bg-white text-gray-600'}">
+                                            ${date ? `<span class="text-xs font-bold">${date.getDate()}</span>${total > 0 ? `<span class="text-[7px] font-black mt-1 ${isSelected ? 'text-white' : 'text-[#0095FF]'}">-${total}</span>` : ''}` : ''}
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+                        <div class="space-y-4">
+                            <h3 class="text-[10px] font-black tracking-[0.2em] text-gray-400 uppercase italic px-2">${state.selectedDay.toLocaleDateString('zh-TW', { month: 'long', day: 'numeric' })} 紀錄</h3>
+                            ${state.transactions.filter(t => t.createdAt?.seconds && new Date(t.createdAt.seconds * 1000).toDateString() === state.selectedDay.toDateString()).map(tx => `
+                                <div onclick='window.openEdit(${JSON.stringify(tx).replace(/'/g, "&apos;")})' class="bg-white/60 p-4 rounded-[24px] border border-white flex justify-between items-center shadow-sm cursor-pointer active:scale-95 transition-all">
+                                    <div class="flex items-center space-x-3"><span>🏷️</span><div><p class="text-sm font-bold text-gray-800">${tx.category}</p><p class="text-[8px] text-gray-400">${tx.note || ''}</p></div></div>
+                                    <p class="text-sm font-black ${tx.type === '收入' ? 'text-green-500' : 'text-gray-700'}">${tx.type === '支出' ? '-' : '+'} ${Number(tx.amount).toLocaleString()}</p>
+                                </div>
+                            `).join('') || '<p class="text-center py-10 text-gray-300 text-xs italic">無紀錄 🕯️</p>'}
+                        </div>
+                    </div>
+                `;
+            } else if (state.activeView === 'stats') {
+                content += `
+                    <div class="bg-white/80 rounded-[40px] p-10 border border-white shadow-lg space-y-10 animate-fade-in">
+                        <h3 class="text-[11px] font-black text-gray-400 uppercase tracking-[0.4em] border-b border-gray-50 pb-4 text-center">類別分佈分析</h3>
+                        ${Object.entries(state.transactions.filter(t => t.type === '支出').reduce((acc, cur) => { acc[cur.category] = (acc[cur.category] || 0) + (Number(cur.amount) || 0); return acc; }, {})).map(([cat, val]) => `
+                            <div class="space-y-2">
+                                <div class="flex justify-between text-[13px] font-black mb-2 tracking-tight text-gray-600"><span>${cat}</span><span class="text-[#0095FF]">NT$ ${val.toLocaleString()}</span></div>
+                                <div class="h-2 bg-gray-100 rounded-full overflow-hidden shadow-inner"><div class="h-full bg-gradient-to-r from-[#0095FF] to-[#00E0FF] transition-all duration-1000" style="width: ${Math.min((val/(expenseTotal||1))*100, 100)}%"></div></div>
+                            </div>
+                        `).join('') || '<p class="text-center text-gray-300 text-xs py-10">無數據 🧊</p>'}
+                    </div>
+                `;
+            }
+
+            content += `</main>`;
+
+            // 底部導航
+            content += `
+                <div class="absolute bottom-10 inset-x-0 flex justify-center z-40 pointer-events-none">
+                    <div class="bg-black/90 backdrop-blur-2xl px-12 py-5 rounded-full shadow-2xl flex items-center space-x-12 pointer-events-auto border border-white/10">
+                        <button onclick="window.setView('home')" class="p-2 transition-all active:scale-90 ${state.activeView === 'home' ? 'text-[#0095FF] scale-125' : 'text-gray-500'}"><svg class="w-7 h-7" fill="currentColor" viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg></button>
+                        <button onclick="window.setView('calendar')" class="p-2 transition-all active:scale-90 ${state.activeView === 'calendar' ? 'text-[#0095FF] scale-125' : 'text-gray-500'}"><svg class="w-7 h-7" fill="currentColor" viewBox="0 0 24 24"><path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10z"/></svg></button>
+                        <button onclick="window.toggleAdding(true)" class="w-16 h-16 bg-[#0095FF] rounded-full flex items-center justify-center text-white shadow-lg -mt-10 border-[6px] border-[#F0F4F8] hover:scale-110 active:scale-90 transition-all"><svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M12 4v16m8-8H4" /></svg></button>
+                        <button onclick="window.setView('stats')" class="p-2 transition-all active:scale-90 ${state.activeView === 'stats' ? 'text-[#0095FF] scale-125' : 'text-gray-500'}"><svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6h-6z"/></svg></button>
+                    </div>
+                </div>
+            `;
+
+            // Modals
+            if (state.isAdding) {
+                content += `
+                    <div class="absolute inset-0 z-[100] bg-black/40 backdrop-blur-md p-8 flex flex-col justify-end transition-all animate-fade-in">
+                        <div class="absolute inset-0" onclick="window.toggleAdding(false)"></div>
+                        <div class="bg-white rounded-[50px] p-10 shadow-2xl border border-white relative animate-slide-up z-10 flex flex-col">
+                            <div class="flex justify-between items-center mb-8"><div><h2 class="text-2xl font-black tracking-tighter italic uppercase border-b-4 border-[#0095FF] text-gray-800">智慧存入</h2><p class="text-[9px] text-[#0095FF] font-bold mt-1 uppercase italic italic">支援 W/K 解析</p></div><button onclick="window.toggleAdding(false)" class="bg-gray-100 p-3 rounded-full text-gray-400"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M6 18L18 6M6 6l12 12" /></svg></button></div>
+                            <div class="relative mb-8 overflow-x-auto no-scrollbar flex space-x-3 pb-4 px-1">
+                                ${['AI 萊歐斯', ...state.categories].map(cat => `<button onclick="window.setSelectedCat('${cat}')" class="px-6 py-3 rounded-full text-[12px] font-black whitespace-nowrap border transition-all ${state.selectedCategory === cat ? 'bg-[#0095FF] text-white border-[#0095FF] shadow-lg shadow-[#0095FF]/20' : 'bg-gray-50 text-gray-400 border-transparent'}">${cat}</button>`).join('')}
+                            </div>
+                            <textarea id="noteInput" class="w-full h-44 bg-gray-50 rounded-[35px] p-8 text-2xl font-light outline-none no-scrollbar shadow-inner focus:ring-2 ring-[#0095FF]/10 transition-all text-gray-800" placeholder="薪資 25W 房貸 15k..." autofocus></textarea>
+                            <button id="submitBtn" onclick="window.submitSmartAdd()" class="w-full mt-10 py-6 rounded-[30px] font-black text-xl transition-all shadow-xl bg-[#0095FF] text-white active:scale-95 transition-all">${state.isGeminiLoading ? '正在解凍數據...' : '確認存入指令'}</button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (state.editingTx) {
+                content += `
+                    <div class="absolute inset-0 z-[120] bg-black/70 backdrop-blur-md p-8 flex flex-col justify-center animate-fade-in">
+                        <div class="absolute inset-0" onclick="window.closeEdit()"></div>
+                        <div class="bg-white rounded-[50px] p-10 shadow-2xl border border-white relative animate-slide-up z-10 flex flex-col">
+                            <div class="flex justify-between items-center mb-10"><h3 class="text-2xl font-black italic tracking-tighter uppercase border-b-2 border-[#0095FF] text-gray-800">紀錄修正術</h3><button onclick="window.closeEdit()" class="p-3 text-gray-300 shadow-inner rounded-full active:scale-90 transition-all"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M6 18L18 6M6 6l12 12" /></svg></button></div>
+                            <div class="space-y-6">
+                                <div><label class="text-[10px] font-black text-gray-400 block mb-2 px-2 italic uppercase">金額修正量</label><input id="editAmount" type="number" value="${state.editingTx.amount}" class="w-full bg-gray-50 rounded-3xl p-6 text-3xl font-black outline-none shadow-inner text-[#0095FF]" /></div>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div><label class="text-[10px] font-black text-gray-400 block mb-2 px-2 italic uppercase">分類屬性</label><select id="editCat" class="w-full bg-gray-50 rounded-2xl p-4 text-sm font-bold border-none outline-none">${state.categories.map(c => `<option value="${c}" ${c === state.editingTx.category ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+                                    <div><label class="text-[10px] font-black text-gray-400 block mb-2 px-2 italic uppercase">收支類別</label><select id="editType" class="w-full bg-gray-50 rounded-2xl p-4 text-sm font-bold border-none outline-none"><option value="支出" ${state.editingTx.type === '支出' ? 'selected' : ''}>支出</option><option value="收入" ${state.editingTx.type === '收入' ? 'selected' : ''}>收入</option></select></div>
+                                </div>
+                                <div><label class="text-[10px] font-black text-gray-400 block mb-2 px-2 italic uppercase">備註說明</label><input id="editNote" type="text" value="${state.editingTx.note || ''}" class="w-full bg-gray-50 rounded-2xl p-4 text-sm font-bold outline-none shadow-inner" /></div>
+                                <div class="flex space-x-4 pt-6">
+                                    <button onclick="window.deleteTx()" class="flex-1 py-5 bg-red-50 text-red-500 font-black rounded-3xl active:scale-95 border border-red-100 uppercase italic">移除紀錄</button>
+                                    <button onclick="window.updateTx()" class="flex-2 py-5 bg-[#0095FF] text-white font-black rounded-3xl shadow-xl active:scale-95 px-10 italic">確認同步</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (state.isSettingBalance) {
+                content += `
+                    <div class="absolute inset-0 z-[110] bg-black/60 backdrop-blur-md p-8 flex flex-col justify-center animate-fade-in">
+                        <div class="absolute inset-0" onclick="window.toggleSettingBalance(false)"></div>
+                        <div class="bg-white w-full rounded-[50px] p-12 shadow-2xl relative z-10 animate-slide-up border border-white">
+                            <h3 class="text-2xl font-black italic tracking-tighter mb-4 text-center border-b-4 border-[#0095FF] inline-block mx-auto uppercase">資產重設魔法</h3>
+                            <input id="balanceInput" type="text" value="${state.initialBalance}" class="w-full bg-gray-50 border-2 border-transparent focus:border-[#0095FF]/20 rounded-[35px] p-8 text-4xl font-black outline-none mb-10 text-center shadow-inner" placeholder="5w 或 50000..." />
+                            <button onclick="window.submitBalance()" class="w-full py-6 bg-gray-900 text-white font-black rounded-3xl shadow-2xl active:scale-95 transition-all uppercase tracking-widest italic text-sm">更新核心數據庫</button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (state.isManagingCategories) {
+                content += `
+                    <div class="absolute inset-0 z-[110] bg-black/60 backdrop-blur-md p-8 flex flex-col justify-center animate-fade-in">
+                        <div class="absolute inset-0" onclick="window.toggleManagingCategories(false)"></div>
+                        <div class="bg-white rounded-[50px] p-10 shadow-2xl relative z-10 animate-slide-up border border-white">
+                            <div class="flex justify-between items-center mb-8"><h3 class="text-xl font-black italic tracking-tighter border-b-2 border-[#0095FF] uppercase text-gray-800">標籤管理</h3><button onclick="window.toggleManagingCategories(false)" class="text-gray-300"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M6 18L18 6M6 6l12 12" /></svg></button></div>
+                            <div class="space-y-3 mb-10 max-h-72 overflow-y-auto no-scrollbar pr-1">${state.categories.map(cat => `<div class="flex justify-between items-center bg-gray-50 px-6 py-4 rounded-[24px] group hover:border-[#0095FF]/30 transition-all shadow-sm"><span class="text-sm font-black text-gray-600 tracking-tight uppercase italic">${cat}</span><button onclick="window.removeCat('${cat}')" class="text-red-400 text-[10px] font-black uppercase opacity-0 group-hover:opacity-100 transition-opacity">撤換</button></div>`).join('')}</div>
+                            <div class="flex space-x-3"><input id="newCatInput" type="text" placeholder="新標籤..." class="flex-1 bg-gray-50 rounded-[20px] px-6 py-4 text-sm outline-none border-2 border-transparent focus:border-[#0095FF]/20 shadow-inner" /><button onclick="window.addCat()" class="bg-[#0095FF] text-white px-8 py-3 rounded-[20px] font-black text-sm active:scale-95 shadow-lg">增加</button></div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            root.innerHTML = content;
+        }
+
+        // --- 全域方法 ---
+        window.setView = (v) => { state.activeView = v; render(); };
+        window.toggleAdding = (s) => { state.isAdding = s; render(); };
+        window.toggleSettingBalance = (s) => { state.isSettingBalance = s; render(); };
+        window.toggleManagingCategories = (s) => { state.isManagingCategories = s; render(); };
+        window.setSelectedCat = (cat) => { state.selectedCategory = cat; render(); };
+        window.setHomeFilter = (cat) => { state.homeFilterCategory = cat; render(); };
+        window.changeMonth = (delta) => { state.currentMonth.setMonth(state.currentMonth.getMonth() + delta); render(); };
+        window.selectDay = (iso) => { state.selectedDay = new Date(iso); render(); };
+        window.openEdit = (tx) => { state.editingTx = tx; render(); };
+        window.closeEdit = () => { state.editingTx = null; render(); };
+
+        window.submitBalance = async () => {
+            const val = document.getElementById('balanceInput').value;
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), { initialBalance: parseAmount(val) }, { merge: true });
+            state.isSettingBalance = false;
+        };
+
+        window.addCat = async () => {
+            const val = document.getElementById('newCatInput').value;
+            if (!val.trim()) return;
+            const newList = [...state.categories, val.trim()];
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'user_cats'), { list: newList });
+            document.getElementById('newCatInput').value = '';
+        };
+
+        window.removeCat = async (cat) => {
+            const newList = state.categories.filter(c => c !== cat);
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'user_cats'), { list: newList });
+        };
+
+        window.deleteTx = async () => {
+            if (!state.editingTx) return;
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', state.editingTx.id));
+            state.editingTx = null;
+        };
+
+        window.updateTx = async () => {
+            if (!state.editingTx) return;
+            const amount = document.getElementById('editAmount').value;
+            const category = document.getElementById('editCat').value;
+            const type = document.getElementById('editType').value;
+            const note = document.getElementById('editNote').value;
+            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', state.editingTx.id), {
+                amount: Number(amount),
+                category,
+                type,
+                note
+            });
+            state.editingTx = null;
+        };
+
+        window.submitSmartAdd = async () => {
+            const input = document.getElementById('noteInput').value;
+            if (!input.trim() || state.isGeminiLoading) return;
+            state.isGeminiLoading = true; render();
+
+            const prompt = `你是一個專業記帳助手。請解析文字並返回一個 JSON 陣列（不含 Markdown 標籤）：[{"amount": "數字串", "category": "分類", "type": "支出"|"收入", "note": "事由"}]。
+            規則：W=萬, K=千。分類從 [${state.categories.join(',')}] 挑選。輸入內容：${input}`;
+
+            try {
+                const raw = await fetchGemini(prompt);
+                const results = JSON.parse(raw.replace(/```json|```/g, '').trim());
+                const txCol = collection(db, 'artifacts', appId, 'public', 'data', 'transactions');
+                for (const item of results) {
+                    await addDoc(txCol, {
+                        amount: parseAmount(item.amount),
+                        category: state.selectedCategory === 'AI 萊歐斯' ? (item.category || '其他') : state.selectedCategory,
+                        type: item.type || (item.category === '薪資' ? '收入' : '支出'),
+                        note: item.note || input.substring(0, 15),
+                        createdAt: serverTimestamp(),
+                        uid: state.user.uid
+                    });
+                }
+                state.isAdding = false;
+            } catch (e) { console.error("AI 解析錯誤:", e); }
+            finally { state.isGeminiLoading = false; render(); }
+        };
+
+        // --- 啟動與身份監聽 (Rule 3) ---
+        onAuthStateChanged(auth, async (u) => {
+            if (u) {
+                state.user = u;
+                setupListeners();
+                render();
+            } else {
+                try {
+                    await signInAnonymously(auth);
+                } catch (err) {
+                    console.error("Auth Failed", err);
+                    document.getElementById('loading').innerHTML = `<p class="text-red-400 font-bold">連線失敗，請檢查金鑰</p>`;
+                }
+            }
+        });
+
+    </script>
+</body>
+</html>
