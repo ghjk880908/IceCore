@@ -155,7 +155,7 @@
                 content += `
                     <div class="space-y-6 animate-fade-in">
                         <div onclick="window.toggleSettingBalance(true)" class="bg-white/80 rounded-[45px] p-10 shadow-sm border border-white relative overflow-hidden cursor-pointer active:scale-95 transition-all group">
-                            <p class="text-[11px] font-bold text-gray-400 uppercase mb-2 text-center">總資產核心</p>
+                            <p class="text-[11px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-2 text-center">總資產核心</p>
                             <h2 class="amount-text text-5xl font-black text-[#0095FF] tracking-tighter text-center"><span class="text-2xl mr-1 opacity-20 italic">NT$</span>${currentBalance.toLocaleString()}</h2>
                             <div class="mt-10 grid grid-cols-2 gap-4 border-t border-gray-100 pt-8">
                                 <div class="bg-[#0095FF]/5 p-4 rounded-[24px] border border-white text-center"><p class="text-[9px] text-gray-400 font-black mb-1 uppercase text-center">累計捕獲</p><p class="text-lg font-bold text-green-500 text-center">+${incomeTotal.toLocaleString()}</p></div>
@@ -235,7 +235,7 @@
                     <div class="absolute inset-0 z-[100] bg-black/40 backdrop-blur-md p-8 flex flex-col justify-end transition-all animate-fade-in">
                         <div class="absolute inset-0" onclick="window.toggleAdding(false)"></div>
                         <div class="bg-white rounded-[50px] p-10 shadow-2xl border border-white relative animate-slide-up z-10 flex flex-col">
-                            <div class="flex justify-between items-center mb-8"><div><h2 class="text-2xl font-black uppercase border-b-4 border-[#0095FF] text-gray-800">智慧存入</h2><p class="text-[9px] text-[#0095FF] font-bold mt-1 uppercase italic">支援 W/K 解析與 AI 解析</p></div><button onclick="window.toggleAdding(false)" class="text-gray-400">✕</button></div>
+                            <div class="flex justify-between items-center mb-8"><div><h2 class="text-2xl font-black uppercase border-b-4 border-[#0095FF] text-gray-800">智慧存入</h2><p class="text-[9px] text-[#0095FF] font-bold mt-1 uppercase italic italic">支援 W/K 解析與 AI 解析</p></div><button onclick="window.toggleAdding(false)" class="text-gray-400">✕</button></div>
                             <textarea id="noteInput" class="w-full h-44 bg-gray-50 rounded-[35px] p-8 text-2xl font-light outline-none no-scrollbar shadow-inner focus:ring-2 ring-[#0095FF]/10 transition-all text-gray-800" placeholder="薪資 25W 房貸 15k..." autofocus></textarea>
                             <button id="submitBtn" onclick="window.submitSmartAdd()" class="w-full mt-10 py-6 rounded-[30px] font-black text-xl bg-[#0095FF] text-white active:scale-95 transition-all">${state.isGeminiLoading ? '正在分析冰封數據...' : '確認執行存入指令'}</button>
                         </div>
@@ -252,8 +252,8 @@
                             <div class="space-y-6">
                                 <div><label class="text-[10px] font-black text-gray-400 block mb-2 px-2 uppercase italic">金額修正量</label><input id="editAmount" type="number" value="${state.editingTx.amount}" class="w-full bg-gray-50 rounded-3xl p-6 text-3xl font-black outline-none shadow-inner text-[#0095FF]" /></div>
                                 <div class="flex space-x-4 pt-6">
-                                    <button onclick="window.deleteTx()" class="flex-1 py-5 bg-red-50 text-red-500 font-black rounded-3xl active:scale-95 border border-red-100 uppercase italic">移除紀錄</button>
-                                    <button onclick="window.updateTx()" class="flex-2 py-5 bg-[#0095FF] text-white font-black rounded-3xl shadow-xl active:scale-95 px-10 italic">確認同步</button>
+                                    <button onclick="window.deleteTx()" class="flex-1 py-5 bg-red-50 text-red-500 font-black rounded-3xl active:scale-95 border border-red-100 uppercase italic transition-all">移除紀錄</button>
+                                    <button onclick="window.updateTx()" class="flex-2 py-5 bg-[#0095FF] text-white font-black rounded-3xl shadow-xl active:scale-95 px-10 italic transition-all">確認同步</button>
                                 </div>
                             </div>
                         </div>
